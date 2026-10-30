@@ -19,9 +19,16 @@
       ansible.builtin.stat:
         path: /opt/aleph/.env
       register: previous_config
+    - name: Check whether a database is running for backup
+      ansible.builtin.command:
+        argv: [docker, compose, ps, --status, running, -q, db]
+        chdir: /opt/aleph
+      when: previous_config.stat.exists
+      register: running_database
+      changed_when: false
     - name: Backup an existing installation before changing versions
       ansible.builtin.command: /opt/aleph/backup.sh
-      when: previous_config.stat.exists
+      when: previous_config.stat.exists and running_database.stdout | default('') | trim != ''
       changed_when: true
     - name: Keep previous release environment
       ansible.builtin.copy:
@@ -109,6 +116,30 @@
         wait_timeout: 180
         build: never
         pull: never
+      when: activate | bool
+    - name: Refresh Nginx upstream resolution after backend replacement
+      ansible.builtin.command:
+        argv: [docker, compose, exec, -T, web, nginx, -s, reload]
+        chdir: /opt/aleph
+      when: activate | bool
+      changed_when: true
+    - name: Ensure Caddy owns its access log directory
+      ansible.builtin.file:
+        path: /var/log/caddy
+        state: directory
+        owner: caddy
+        group: caddy
+        mode: "0750"
+      when: activate | bool
+    - name: Ensure Caddy can write the access log before configuration validation
+      ansible.builtin.file:
+        path: /var/log/caddy/aleph-access.log
+        state: touch
+        owner: caddy
+        group: caddy
+        mode: "0640"
+        modification_time: preserve
+        access_time: preserve
       when: activate | bool
     - name: Validate and install Caddy configuration
       ansible.builtin.template:

@@ -1,0 +1,13 @@
+- name: Build and publish production images through GitHub Actions
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Dispatch CI image build for the selected Git ref
+      ansible.builtin.command:
+        argv: [gh, workflow, run, images.yml, --ref, "{{ release_ref | default('main') }}"]
+        chdir: "{{ playbook_dir }}/../.."
+      changed_when: true
+    - name: Show build progress command
+      ansible.builtin.debug:
+        msg: "Use gh run list --workflow images.yml, then gh run watch <run-id> --exit-status. Deploy only after both images pass."

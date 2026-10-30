@@ -1,0 +1,7 @@
+{
+  "release_commit": "5bfc43d6ee5ce79e267ffdd5243e85f11fdf9e76",
+  "backend_image": "ghcr.io/rvnovaes/aleph-backend@sha256:ac0c0da735b4fbd85d81933c2c5dcf677e092ddbce259d94bdffc6cf8ba86e73",
+  "web_image": "ghcr.io/rvnovaes/aleph-web@sha256:16a6763e15bbd16b272e41f11d35b5ab51ca6300b22840d97f503bd828088de4",
+  "postgres_image": "postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+  "alpine_image": "alpine@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f"
+}

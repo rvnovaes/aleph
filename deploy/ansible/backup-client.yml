@@ -1,0 +1,39 @@
+- name: Schedule off-server backup copy on this workstation
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Create user service directory
+      ansible.builtin.file:
+        path: "{{ ansible_facts.env.HOME }}/.config/systemd/user"
+        state: directory
+        mode: "0700"
+    - name: Install offsite backup copy service
+      ansible.builtin.copy:
+        dest: "{{ ansible_facts.env.HOME }}/.config/systemd/user/aleph-backup-fetch.service"
+        mode: "0600"
+        content: |
+          [Unit]
+          Description=Copy Aleph production backups to local private storage
+          [Service]
+          Type=oneshot
+          ExecStart={{ (playbook_dir + '/../../scripts/fetch-production-backup.sh') | realpath }}
+    - name: Schedule copy after server backup
+      ansible.builtin.copy:
+        dest: "{{ ansible_facts.env.HOME }}/.config/systemd/user/aleph-backup-fetch.timer"
+        mode: "0600"
+        content: |
+          [Unit]
+          Description=Daily off-server copy of Aleph backups
+          [Timer]
+          OnCalendar=*-*-* 06:30:00 UTC
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+    - name: Enable local backup timer
+      ansible.builtin.systemd_service:
+        name: aleph-backup-fetch.timer
+        scope: user
+        enabled: true
+        state: started
+        daemon_reload: true
