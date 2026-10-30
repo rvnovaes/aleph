@@ -3,7 +3,7 @@ import json
 from datetime import timedelta
 
 from django.contrib.auth import authenticate, login, logout
-from django.db import transaction
+from django.db import connection, transaction
 from django.http import FileResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
@@ -83,3 +83,14 @@ def cover(request, work_id):
     response = FileResponse(work.cover.open("rb"), content_type="image/webp")
     response["Cache-Control"] = "private, no-store"
     return response
+
+
+@require_GET
+def health(request):
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception:
+        return JsonResponse({"status": "unavailable"}, status=503)
+    return JsonResponse({"status": "ok"})

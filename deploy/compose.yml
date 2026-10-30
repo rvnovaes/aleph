@@ -1,0 +1,76 @@
+name: aleph
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+x-backend: &backend
+  image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE digest}
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://aleph:${POSTGRES_PASSWORD}@db:5432/aleph
+    MEDIA_ROOT: /data/pdfs
+  volumes:
+    - library:/data
+  logging: *logging
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE digest}
+    environment:
+      POSTGRES_DB: aleph
+      POSTGRES_USER: aleph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set password}
+      PGDATA: /data/pgdata
+    volumes:
+      - library:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aleph -d aleph"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+  storage-init:
+    image: ${ALPINE_IMAGE:?Set ALPINE_IMAGE digest}
+    command: ["sh", "-c", "mkdir -p /data/pdfs && chown 1000:1000 /data/pdfs && chmod 700 /data/pdfs"]
+    volumes:
+      - library:/data
+    profiles: [tools]
+    logging: *logging
+  migrate:
+    <<: *backend
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    profiles: [tools]
+  backend:
+    <<: *backend
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+  web:
+    image: ${WEB_IMAGE:?Set WEB_IMAGE digest}
+    ports: ["127.0.0.1:8088:80"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+volumes:
+  library:
+    name: aleph_library
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.88.0/24

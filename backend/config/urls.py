@@ -4,6 +4,7 @@ from catalog import views
 from catalog.api import api
 
 urlpatterns = [
+    path("api/health", views.health),
     path("api/covers/<int:work_id>", views.cover),
     path("api/session", views.session),
     path("api/login", views.sign_in),

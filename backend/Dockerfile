@@ -3,7 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends yaz && rm -rf /
 COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
+ARG UV_SYNC_FLAGS=""
+RUN uv sync --frozen ${UV_SYNC_FLAGS}
 COPY . .
 RUN useradd -u 1000 -m aleph
 USER aleph

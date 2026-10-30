@@ -1,0 +1,73 @@
+- name: Restore an initial Aleph installation once
+  hosts: production
+  become: true
+  tasks:
+    - name: Require source backup
+      ansible.builtin.assert:
+        that: backup_dir is defined
+    - name: Check completed restoration marker
+      ansible.builtin.stat:
+        path: /opt/aleph/.restored
+      register: restored
+    - name: Never overwrite an initialized production database
+      ansible.builtin.assert:
+        that: not restored.stat.exists
+        fail_msg: "Production has already been restored. This playbook cannot overwrite it."
+    - name: Check database is empty
+      ansible.builtin.command:
+        argv: [docker, compose, exec, -T, db, psql, -U, aleph, -d, aleph, -Atc, "SELECT count(*) FROM pg_tables WHERE schemaname='public'"]
+        chdir: /opt/aleph
+      register: table_count
+      changed_when: false
+    - name: Abort if any application tables exist
+      ansible.builtin.assert:
+        that: table_count.stdout | trim == '0'
+    - name: Create restricted transfer directory
+      ansible.builtin.file:
+        path: /opt/aleph/initial-backup
+        state: directory
+        mode: "0700"
+    - name: Transfer consistent backup over SSH
+      ansible.builtin.copy:
+        src: "{{ backup_dir }}/{{ item }}"
+        dest: "/opt/aleph/initial-backup/{{ item }}"
+        mode: "0600"
+      loop: [database.dump, pdfs.tar.gz]
+    - name: Restore PostgreSQL
+      ansible.builtin.shell:
+        cmd: docker compose exec -T db pg_restore -U aleph -d aleph --no-owner --no-acl --exit-on-error --single-transaction < initial-backup/database.dump
+        chdir: /opt/aleph
+      changed_when: true
+    - name: Restore media as application owner
+      ansible.builtin.shell:
+        cmd: docker compose run --rm -T --no-deps --user 1000 backend tar -C /data -xzf - < initial-backup/pdfs.tar.gz
+        chdir: /opt/aleph
+      changed_when: true
+    - name: Reset production login and clear copied sessions before publication
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - run
+          - --rm
+          - -T
+          - --no-deps
+          - -e
+          - ALEPH_INITIAL_PASSWORD
+          - backend
+          - python
+          - manage.py
+          - shell
+          - -c
+          - "import os; from django.contrib.auth import get_user_model; from django.contrib.sessions.models import Session; from catalog.models import LoginAttempt; u=get_user_model().objects.get(username='roberto'); u.set_password(os.environ['ALEPH_INITIAL_PASSWORD']); u.save(update_fields=['password']); Session.objects.all().delete(); LoginAttempt.objects.all().delete()"
+        chdir: /opt/aleph
+      environment:
+        ALEPH_INITIAL_PASSWORD: "{{ production_login_password }}"
+      no_log: true
+      changed_when: true
+    - name: Mark completed initial restore
+      ansible.builtin.copy:
+        dest: /opt/aleph/.restored
+        content: "Initial database and media restored. Never automatically overwrite.
+"
+        mode: "0600"

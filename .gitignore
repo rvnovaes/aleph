@@ -247,3 +247,6 @@ frontend/playwright-report/
 # Svelte application source (not Python build output)
 !/frontend/src/lib/
 !/frontend/src/lib/**
+
+# Production credentials and local deployment state
+/deploy/.private/

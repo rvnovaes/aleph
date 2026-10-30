@@ -1,0 +1,173 @@
+- name: Deploy pinned Aleph images
+  hosts: production
+  become: true
+  vars:
+    domain: aleph.robertonovaes.com.br
+    activate: true
+  tasks:
+    - name: Require immutable images and independent production secrets
+      ansible.builtin.assert:
+        that:
+          - "'@sha256:' in backend_image"
+          - "'@sha256:' in web_image"
+          - "'@sha256:' in postgres_image"
+          - "'@sha256:' in alpine_image"
+          - django_secret | length >= 40
+          - postgres_password | length >= 32
+      no_log: true
+    - name: Check for deployed configuration
+      ansible.builtin.stat:
+        path: /opt/aleph/.env
+      register: previous_config
+    - name: Backup an existing installation before changing versions
+      ansible.builtin.command: /opt/aleph/backup.sh
+      when: previous_config.stat.exists
+      changed_when: true
+    - name: Keep previous release environment
+      ansible.builtin.copy:
+        src: /opt/aleph/.env
+        dest: /opt/aleph/releases/previous.env
+        remote_src: true
+        mode: "0600"
+      when: previous_config.stat.exists
+      no_log: true
+    - name: Install production Compose
+      ansible.builtin.copy:
+        src: ../compose.yml
+        dest: /opt/aleph/compose.yml
+        mode: "0600"
+    - name: Write environment
+      ansible.builtin.template:
+        src: env.j2
+        dest: /opt/aleph/.env
+        mode: "0600"
+      no_log: true
+    - name: Install backup script
+      ansible.builtin.copy:
+        src: backup.sh
+        dest: /opt/aleph/backup.sh
+        mode: "0700"
+    - name: Fetch private or public images with temporary registry credentials
+      block:
+        - name: Create ephemeral registry config directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: aleph-registry-
+          register: docker_auth_dir
+        - name: Authenticate for this pull only
+          community.docker.docker_login:
+            registry_url: ghcr.io
+            username: "{{ registry_user }}"
+            password: "{{ lookup('ansible.builtin.env', 'ALEPH_GH_TOKEN') }}"
+            config_path: "{{ docker_auth_dir.path }}/config.json"
+          no_log: true
+        - name: Pull all release images
+          ansible.builtin.command:
+            argv: [docker, compose, --profile, tools, pull]
+            chdir: /opt/aleph
+          environment:
+            DOCKER_CONFIG: "{{ docker_auth_dir.path }}"
+          changed_when: true
+      always:
+        - name: Remove registry credentials
+          ansible.builtin.file:
+            path: "{{ docker_auth_dir.path }}"
+            state: absent
+          when: docker_auth_dir.path is defined
+    - name: Start database
+      community.docker.docker_compose_v2:
+        project_src: /opt/aleph
+        services: [db]
+        state: present
+        wait: true
+        wait_timeout: 120
+        build: never
+        pull: never
+    - name: Prepare media directory
+      ansible.builtin.command:
+        argv: [docker, compose, run, --rm, --no-deps, storage-init]
+        chdir: /opt/aleph
+      changed_when: false
+    - name: Stop web and backend before schema migration
+      ansible.builtin.command:
+        argv: [docker, compose, stop, web, backend]
+        chdir: /opt/aleph
+      when: activate | bool
+      changed_when: true
+    - name: Apply database migrations
+      ansible.builtin.command:
+        argv: [docker, compose, run, --rm, --no-deps, migrate]
+        chdir: /opt/aleph
+      when: activate | bool
+      changed_when: true
+    - name: Start healthy application
+      community.docker.docker_compose_v2:
+        project_src: /opt/aleph
+        state: present
+        services: [backend, web]
+        wait: true
+        wait_timeout: 180
+        build: never
+        pull: never
+      when: activate | bool
+    - name: Validate and install Caddy configuration
+      ansible.builtin.template:
+        src: Caddyfile.j2
+        dest: /etc/caddy/Caddyfile
+        mode: "0644"
+        validate: caddy validate --adapter caddyfile --config %s
+      when: activate | bool
+      notify: Reload Caddy
+    - name: Enable public HTTPS
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: started
+        enabled: true
+      when: activate | bool
+    - name: Apply Caddy changes
+      ansible.builtin.meta: flush_handlers
+    - name: Install daily database and media backup service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/aleph-backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Aleph consistent database and media backup
+          After=docker.service
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/aleph/backup.sh
+    - name: Schedule nightly backup
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/aleph-backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Nightly Aleph backup
+          [Timer]
+          OnCalendar=*-*-* 06:00:00 UTC
+          Persistent=true
+          RandomizedDelaySec=300
+          [Install]
+          WantedBy=timers.target
+    - name: Enable backup timer
+      ansible.builtin.systemd_service:
+        name: aleph-backup.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: activate | bool
+    - name: Verify HTTPS application and database
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/api/health"
+        return_content: true
+      register: health
+      until: health.status == 200
+      retries: 18
+      delay: 5
+      when: activate | bool
+  handlers:
+    - name: Reload Caddy
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
