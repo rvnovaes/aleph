@@ -1,0 +1,55 @@
+name: aleph
+services:
+  storage-init:
+    image: alpine:3.22
+    command: ["sh", "-c", "mkdir -p /data/pdfs && chown 1000:1000 /data/pdfs && chmod 700 /data/pdfs"]
+    volumes:
+      - library:/data
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aleph
+      POSTGRES_USER: aleph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD no .env}
+      PGDATA: /data/pgdata
+    volumes:
+      - library:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aleph -d aleph"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: ./backend
+    env_file: .env
+    environment: &backend-env
+      DATABASE_URL: postgresql://aleph:${POSTGRES_PASSWORD}@db:5432/aleph
+      MEDIA_ROOT: /data/pdfs
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+  backend:
+    build: ./backend
+    env_file: .env
+    environment: *backend-env
+    volumes:
+      - library:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      storage-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+  web:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${PORT:-8088}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+volumes:
+  library:

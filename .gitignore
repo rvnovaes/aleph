@@ -218,3 +218,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Aleph local files and build outputs
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.sqlite3
+node_modules/
+.svelte-kit/
+frontend/build/
+media/
+backups/
+frontend/test-results/
+frontend/playwright-report/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Personal catalog exports and execution reports
+/data/*.json
+/docs/librarything-*.json
+/docs/abnt-initial-references-*.json
+.env.*
+!.env.example
+
+# Svelte application source (not Python build output)
+!/frontend/src/lib/
+!/frontend/src/lib/**
