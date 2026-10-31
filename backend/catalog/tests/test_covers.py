@@ -44,6 +44,20 @@ def test_only_optimized_cover_persisted(authenticated, settings, tmp_path, forma
     assert authenticated.get(f"/api/v1/works/{work_id}").json()["cover_url"]
 
 
+def test_small_cover_enlarged_without_white_frame():
+    from catalog.covers import optimize_cover
+
+    stream = io.BytesIO()
+    image = Image.new("RGB", (240, 400), "white")
+    image.paste(Image.new("RGB", (200, 320), "navy"), (20, 40))
+    image.save(stream, format="JPEG", quality=95)
+    result = optimize_cover(SimpleUploadedFile("small.jpg", stream.getvalue()))
+    with Image.open(io.BytesIO(result.read())) as cover:
+        assert cover.size == (562, 900)
+        r, g, b = cover.convert("RGB").getpixel((3, 3))
+        assert r < 60 and g < 60 and b > 80
+
+
 def test_replacement_removes_old_file(
     authenticated, settings, tmp_path, django_capture_on_commit_callbacks
 ):

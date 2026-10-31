@@ -5,13 +5,25 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from ninja.errors import HttpError
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageChops, ImageOps, UnidentifiedImageError
 
 from .models import Work
 
 COVER_SIZE = (600, 900)
 MAX_BYTES = 10 * 1024 * 1024
 MAX_PIXELS = 20_000_000
+
+
+def trim_white_margins(image, threshold=24):
+    """Remove near-white padding around a cover, keeping at least half of it."""
+    diff = ImageChops.difference(image, Image.new("RGB", image.size, "white"))
+    box = diff.convert("L").point(lambda v: 255 if v > threshold else 0).getbbox()
+    if not box:
+        return image
+    left, top, right, bottom = box
+    if (right - left) * (bottom - top) < image.width * image.height / 2:
+        return image
+    return image.crop(box)
 
 
 def optimize_cover(upload):
@@ -27,14 +39,18 @@ def optimize_cover(upload):
                     raise HttpError(422, "A imagem deve ter no máximo 20 megapixels.")
                 if getattr(source, "n_frames", 1) != 1:
                     raise HttpError(422, "Envie uma capa estática, sem animação.")
-                # Orient first, then shrink. Metadata is never copied to the output canvas.
-                image = ImageOps.exif_transpose(source)
-                image.thumbnail(COVER_SIZE, Image.Resampling.LANCZOS, reducing_gap=3.0)
-                image = image.convert("RGBA")
-                canvas = Image.new("RGB", COVER_SIZE, "white")
-                canvas.paste(image, ((600 - image.width) // 2, (900 - image.height) // 2), image)
+                # Orient first. Metadata is never copied to the output image.
+                image = ImageOps.exif_transpose(source).convert("RGBA")
+                flat = Image.new("RGB", image.size, "white")
+                flat.paste(image, mask=image)
+                flat = trim_white_margins(flat)
+                # Keep the cover's own proportions and fit it to the cover box,
+                # enlarging small images so they don't look tiny.
+                scale = min(COVER_SIZE[0] / flat.width, COVER_SIZE[1] / flat.height)
+                size = (max(1, round(flat.width * scale)), max(1, round(flat.height * scale)))
+                flat = flat.resize(size, Image.Resampling.LANCZOS)
                 output = io.BytesIO()
-                canvas.save(output, format="WEBP", quality=82, method=4)
+                flat.save(output, format="WEBP", quality=82, method=4)
                 return ContentFile(output.getvalue())
     except (
         UnidentifiedImageError,

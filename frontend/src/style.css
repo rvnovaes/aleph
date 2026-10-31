@@ -84,6 +84,16 @@ body:has(.cover-modal[open]) {
 .cover-preview {
   margin-bottom: 1rem;
 }
+.cover-thumb {
+  width: 120px;
+  height: 180px;
+}
+@media (max-width: 600px) {
+  .cover-thumb {
+    width: 96px;
+    height: 144px;
+  }
+}
 :root {
   font-family: Inter, system-ui, sans-serif;
   color: var(--text);

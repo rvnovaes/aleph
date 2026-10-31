@@ -517,8 +517,8 @@
                 ><img
                   src={work.cover_url}
                   alt={"Capa de " + work.title}
-                  width="72"
-                  height="108"
+                  width="120"
+                  height="180"
                   loading="lazy"
                   class="cover-thumb"
                 /></button
