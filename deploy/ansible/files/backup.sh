@@ -12,7 +12,7 @@ if [[ -n "$was_running" ]]; then
     trap 'docker compose start backend >/dev/null' EXIT
 fi
 docker compose exec -T db pg_dump -U aleph -d aleph -Fc > "$destination/database.dump"
-docker compose run --rm -T --no-deps --user 1000 backend tar -C /data -czf - pdfs > "$destination/pdfs.tar.gz"
+docker compose run --rm -T --no-deps --user 1000 backend tar -C /data -I 'gzip -1' -cf - pdfs > "$destination/pdfs.tar.gz"
 cp .env compose.yml "$destination/"
 (cd "$destination" && sha256sum database.dump pdfs.tar.gz > SHA256SUMS)
 touch "$destination/complete"
