@@ -363,6 +363,7 @@ textarea::placeholder {
 }
 .brand-caption {
   font-size: 0.8rem;
+  font-style: italic;
 }
 .header {
   flex-wrap: wrap;

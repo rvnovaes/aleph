@@ -473,7 +473,9 @@
       <img src="/aleph-icon.png" width="52" height="52" alt="" />
       <div>
         <span class="brand">Aleph</span>
-        <div class="muted brand-caption">Sua biblioteca, no lugar certo.</div>
+        <div class="muted brand-caption" title="Jorge Luis Borges, “O Aleph”">
+          Onde estão, sem se confundirem, todos os lugares.
+        </div>
       </div>
     </a>
     <div class="actions header-actions">
