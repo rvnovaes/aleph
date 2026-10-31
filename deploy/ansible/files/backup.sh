@@ -16,7 +16,8 @@ docker compose run --rm -T --no-deps --user 1000 backend tar -C /data -czf - pdf
 cp .env compose.yml "$destination/"
 (cd "$destination" && sha256sum database.dump pdfs.tar.gz > SHA256SUMS)
 touch "$destination/complete"
-# Keep a fortnight of completed backups; incomplete attempts are retained for investigation.
-find /opt/aleph/backups -mindepth 2 -maxdepth 2 -name complete -mtime +14 -print0 |
-while IFS= read -r -d '' marker; do rm -rf -- "$(dirname "$marker")"; done
+# Keep three complete copies; the PDF collection makes fourteen daily copies exceed disk capacity.
+# Incomplete attempts are retained for investigation. Off-server copies are cumulative.
+mapfile -t completed < <(find /opt/aleph/backups -mindepth 2 -maxdepth 2 -name complete -printf '%h\n' | sort -r)
+for old in "${completed[@]:3}"; do rm -rf -- "$old"; done
 echo "$destination"

@@ -52,7 +52,7 @@ backup correspondente; não reverta o banco automaticamente nem use down -v.
 
 ## Backups
 
-- Timer do servidor: 06:00 UTC (03:00 em Brasília), retenção de 14 dias.
+- Timer do servidor: 06:00 UTC (03:00 em Brasília), retenção das três cópias completas mais recentes.
 - Backup inclui pg_dump, mídia, ambiente e Compose; requer armazenamento privado.
 - `scripts/fetch-production-backup.sh` copia via SSH para backups/production local.
 - A cópia local é cumulativa, sem apagar backups já recebidos.
