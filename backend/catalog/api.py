@@ -46,6 +46,7 @@ def list_works(
     bookcase: str | None = None,
 ):
     queryset = work_queryset(request.user)
+    total_count = queryset.count()
     if q:
         queryset = queryset.filter(
             Q(title__icontains=q)
@@ -75,6 +76,7 @@ def list_works(
     page = max(1, page)
     return {
         "count": queryset.count(),
+        "total_count": total_count,
         "page": page,
         "results": [
             serialize(w) for w in queryset.order_by("title", "pk")[(page - 1) * 30 : page * 30]

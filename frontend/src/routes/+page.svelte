@@ -82,6 +82,7 @@
     works = $state<Work[]>([]),
     locations = $state<Location[]>([]),
     count = $state(0),
+    totalCount = $state(0),
     page = $state(1),
     q = $state(""),
     kind = $state(""),
@@ -146,6 +147,7 @@
     const data = await request("/v1/works?" + params);
     works = data.results;
     count = data.count;
+    totalCount = data.total_count;
     locations = await request("/v1/locations");
     tagOptions = await request("/v1/tags");
     await loadPublishers();
@@ -425,7 +427,10 @@
       <div class="row">
         <div>
           <small>MEU ACERVO</small>
-          <h1>Minha biblioteca</h1>
+          <div class="library-heading">
+            <h1>Minha biblioteca</h1>
+            <span class="library-count" aria-label="Total de cadastros no acervo">{totalCount.toLocaleString("pt-BR")} cadastros</span>
+          </div>
           <p class="muted">
             {count} registros · livros, artigos e leituras digitais
           </p>
@@ -1107,3 +1112,8 @@
     {/if}
   </div>
 </dialog>
+
+<style>
+  .library-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; }
+  .library-count { font-size: 0.9rem; font-weight: 600; border: 1px solid currentColor; border-radius: 999px; padding: 0.25rem 0.65rem; }
+</style>
