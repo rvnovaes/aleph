@@ -36,14 +36,23 @@ test("login, localização, cadastro, busca e referência", async ({ page }) => 
   await page.getByLabel("Sobrenome").fill("Silva");
   await page
     .getByLabel("Localização para o próximo exemplar")
-    .selectOption({ label: "Escritório piloto / 03 / 02" });
+    .fill("piloto 02");
+  await page
+    .getByRole("option", { name: "Escritório piloto / 03 / 02" })
+    .click();
   await page
     .getByRole("button", { name: "Salvar cadastro", exact: true })
     .click();
-  await expect(page.getByText("Cadastro salvo.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Código do exemplar", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Cadastro salvo.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Código do exemplar", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByLabel("Título", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(/SILVA, Ana/);
+  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(
+    /SILVA, Ana/,
+  );
   await page.getByRole("button", { name: "Editar", exact: true }).click();
   await page
     .getByLabel("Observações", { exact: true })
@@ -75,31 +84,65 @@ test("login, localização, cadastro, busca e referência", async ({ page }) => 
   expect(download.suggestedFilename()).toBe("aleph-e2e.pdf");
   await page.getByRole("button", { name: "Ler", exact: true }).click();
   await expect(page.getByTitle("Leitor de PDF")).toBeVisible();
-  await page.getByRole("button", { name: "Cancelar edição e voltar aos detalhes" }).click();
-  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(/SILVA, Ana/);
+  await page
+    .getByRole("button", { name: "Cancelar edição e voltar aos detalhes" })
+    .click();
+  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(
+    /SILVA, Ana/,
+  );
   await expect(page.getByLabel("Título", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Editar", exact: true }).click();
-  await page.getByLabel("Referência ABNT salva", { exact: true }).fill("Referência revisada manualmente.");
-  await page.getByRole("button", { name: "Salvar cadastro", exact: true }).click();
-  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue("Referência revisada manualmente.");
+  await page
+    .getByLabel("Referência ABNT salva", { exact: true })
+    .fill("Referência revisada manualmente.");
+  await page
+    .getByRole("button", { name: "Salvar cadastro", exact: true })
+    .click();
+  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(
+    "Referência revisada manualmente.",
+  );
   await page.getByRole("button", { name: "Editar", exact: true }).click();
   await page.getByLabel("Cidade de publicação").fill("Recife");
-  await expect(page.getByLabel("Referência ABNT salva", { exact: true })).toHaveValue("Referência revisada manualmente.");
-  await page.getByRole("button", { name: "Gerar novamente", exact: true }).click();
-  await expect(page.getByLabel("Referência ABNT salva", { exact: true })).toHaveValue(/Recife/);
-  await page.getByRole("button", { name: "Salvar cadastro", exact: true }).click();
-  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(/Recife/);
+  await expect(
+    page.getByLabel("Referência ABNT salva", { exact: true }),
+  ).toHaveValue("Referência revisada manualmente.");
+  await page
+    .getByRole("button", { name: "Gerar novamente", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Referência ABNT salva", { exact: true }),
+  ).toHaveValue(/Recife/);
+  await page
+    .getByRole("button", { name: "Salvar cadastro", exact: true })
+    .click();
+  await expect(page.getByLabel("Referência ABNT para copiar")).toHaveValue(
+    /Recife/,
+  );
   await page.getByRole("button", { name: "Catálogo", exact: true }).click();
   await page.getByLabel("Buscar no acervo").fill("navegação");
   await page.getByRole("button", { name: "Buscar", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Livro do teste de navegação", exact: true }),
+    page.getByRole("button", {
+      name: "Livro do teste de navegação",
+      exact: true,
+    }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Livro do teste de navegação", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Editar", exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "Livro do teste de navegação", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Editar", exact: true }),
+  ).toBeVisible();
   await expect(page.getByLabel("Título", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Ampliar capa de Livro do teste de navegação", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Capa ampliada" })).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: "Ampliar capa de Livro do teste de navegação",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("dialog", { name: "Capa ampliada" }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Fechar capa" }).click();
   await page.getByRole("button", { name: "Ler", exact: true }).click();
   await expect(page.getByTitle("Leitor de PDF")).toBeVisible();

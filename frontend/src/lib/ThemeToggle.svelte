@@ -30,5 +30,4 @@
   title={dark ? "Ativar modo claro" : "Ativar modo escuro"}
 >
   <span aria-hidden="true">{dark ? "☀" : "☾"}</span>
-  {dark ? "Modo claro" : "Modo escuro"}
 </button>

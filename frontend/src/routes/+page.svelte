@@ -7,6 +7,7 @@
   import { blankWork, request, type Work, type Location } from "$lib/api";
   import { bibliography, bibliographyFromForm } from "$lib/citations";
   import ItemFields from "$lib/ItemFields.svelte";
+  import SearchSelect from "$lib/SearchSelect.svelte";
   import type { Item } from "$lib/api";
   let publishers = $state<Publisher[]>([]);
   async function loadPublishers() {
@@ -21,8 +22,9 @@
     if (found?.default_city && !form.city.trim())
       form.city = found.default_city;
   }
-  let tagFilter = $state(""),
+  let tagFilters = $state<string[]>([]),
     tagOptions = $state<string[]>([]),
+    languages = $state<{ value: string; name: string }[]>([]),
     unlocated = $state(false);
   const listFields: {
     key: "tags" | "subjects" | "ddc" | "ddc_wording" | "lcc" | "series";
@@ -102,7 +104,6 @@
     key:
       | "subtitle"
       | "edition"
-      | "language"
       | "pages"
       | "publisher"
       | "city"
@@ -114,7 +115,6 @@
   }[] = [
     { key: "subtitle", label: "Subtítulo" },
     { key: "edition", label: "Edição" },
-    { key: "language", label: "Idioma" },
     { key: "pages", label: "Páginas / intervalo" },
     { key: "city", label: "Cidade de publicação" },
     { key: "journal", label: "Periódico (artigos)" },
@@ -122,6 +122,31 @@
     { key: "issue", label: "Número" },
     { key: "url", label: "URL" },
   ];
+  const locationLabel = (l: Location) =>
+    [l.room, l.bookcase, l.shelf].filter(Boolean).join(" / ");
+  let locationOptions = $derived(
+    locations.map((l) => ({ value: String(l.id), label: locationLabel(l) })),
+  );
+  let languageOptions = $derived(
+    languages.map((l) => ({
+      value: l.value,
+      label: l.value === l.name ? l.name : `${l.name} (${l.value})`,
+    })),
+  );
+  // "Tupi (tup)" registers name Tupi with code tup; plain text has no code.
+  async function createLanguage(text: string) {
+    const m = text.match(/^(.*?)\s*\(([^()]+)\)\s*$/);
+    const payload = m ? { name: m[1], code: m[2] } : { name: text, code: "" };
+    try {
+      const row = await request("/v1/languages", "POST", payload);
+      languages = await request("/v1/languages");
+      notice = `Idioma “${row.name}” cadastrado.`;
+      return row.value as string;
+    } catch (e) {
+      error = e instanceof Error ? e.message : "Não foi possível cadastrar.";
+      return null;
+    }
+  }
   async function run(action: () => Promise<void>) {
     busy = true;
     error = "";
@@ -143,13 +168,14 @@
       unlocated: String(unlocated),
     });
     if (filterLocation) params.set("location", filterLocation);
-    if (tagFilter) params.set("tag", tagFilter);
+    for (const tag of tagFilters) params.append("tag", tag);
     const data = await request("/v1/works?" + params);
     works = data.results;
     count = data.count;
     totalCount = data.total_count;
     locations = await request("/v1/locations");
     tagOptions = await request("/v1/tags");
+    languages = await request("/v1/languages");
     await loadPublishers();
   }
   onMount(() => {
@@ -169,6 +195,8 @@
   }
   function newWork() {
     form = blankWork();
+    // Start ready for a barcode reader: one ISBN row with the cursor in it.
+    form.identifiers = [{ scheme: "isbn", value: "" }];
     fromLocations = false;
     screen = "edit";
     candidates = [];
@@ -176,6 +204,37 @@
     reference = "";
     error = "";
     notice = "";
+    focusScan();
+  }
+  function focusScan() {
+    setTimeout(() => document.getElementById("scan-isbn")?.focus(), 0);
+  }
+  function isValidIsbn(raw: string) {
+    const v = raw.replace(/[\s-]/g, "").toUpperCase();
+    if (/^\d{13}$/.test(v)) {
+      const sum = [...v.slice(0, 12)].reduce(
+        (s, d, i) => s + Number(d) * (i % 2 ? 3 : 1),
+        0,
+      );
+      return (10 - (sum % 10)) % 10 === Number(v[12]);
+    }
+    if (/^\d{9}[\dX]$/.test(v)) {
+      const sum = [...v].reduce(
+        (s, d, i) => s + (d === "X" ? 10 : Number(d)) * (10 - i),
+        0,
+      );
+      return sum % 11 === 0;
+    }
+    return false;
+  }
+  // Readers type the digits quickly and usually end with Enter. If no Enter
+  // arrives, search on our own once the field holds a complete, valid ISBN.
+  let scanTimer: ReturnType<typeof setTimeout> | undefined;
+  function scheduleScanSearch(identifier: { scheme: string; value: string }) {
+    clearTimeout(scanTimer);
+    if (form.id || identifier.scheme !== "isbn") return;
+    if (!isValidIsbn(identifier.value)) return;
+    scanTimer = setTimeout(() => search(identifier), 250);
   }
   async function open(id: number, viaLocations = false) {
     await run(async () => {
@@ -248,6 +307,7 @@
   async function save(next = false) {
     await run(async () => {
       const created = !form.id;
+      form.identifiers = form.identifiers.filter((i) => i.value.trim());
       if (created && !form.abnt_reference.trim())
         form.abnt_reference = await bibliographyFromForm(form);
       const data = await request(
@@ -265,7 +325,6 @@
       if (next) {
         newWork();
         notice = "Salvo. Pronto para o próximo livro.";
-        setTimeout(() => document.getElementById("add-isbn")?.focus(), 0);
       } else {
         form = await request("/v1/works/" + data.id);
         screen = "details";
@@ -457,30 +516,34 @@
           ><option value="">Todos os tipos</option><option value="book"
             >Livros</option
           ><option value="article-journal">Artigos</option></select
-        ><select aria-label="Localização" bind:value={filterLocation}
-          ><option value="">Todas as localizações</option
-          >{#each locations as l}<option value={l.id}
-              >{[l.room, l.bookcase, l.shelf]
-                .filter(Boolean)
-                .join(" / ")}</option
-            >{/each}</select
-        ><button disabled={busy}>Buscar</button><label
+        ><SearchSelect
+          ariaLabel="Localização"
+          options={locationOptions}
+          bind:value={filterLocation}
+          emptyLabel="Todas as localizações"
+          placeholder="Todas as localizações"
+          onchange={() => {
+            page = 1;
+            unlocated = false;
+            run(load);
+          }}
+        /><button disabled={busy}>Buscar</button><label
           style="flex-direction:row;align-items:center"
           ><input type="checkbox" bind:checked={pending} /> Apenas pendentes</label
         >
       </form>
       <div class="actions" style="margin-bottom:1rem">
         <label
-          >Filtrar por etiqueta<select
-            bind:value={tagFilter}
+          >Filtrar por etiquetas<SearchSelect
+            multiple
+            options={tagOptions.map((tag) => ({ value: tag, label: tag }))}
+            bind:values={tagFilters}
+            placeholder="Digite para escolher uma ou mais"
             onchange={() => {
               page = 1;
               run(load);
             }}
-            ><option value="">Todas as etiquetas</option
-            >{#each tagOptions as tag}<option value={tag}>{tag}</option
-              >{/each}</select
-          ></label
+          /></label
         >
         <label style="flex-direction:row;align-items:center"
           ><input
@@ -552,7 +615,8 @@
                     class="secondary"
                     style="padding:.2rem .5rem;font-size:.8rem"
                     onclick={() => {
-                      tagFilter = tag;
+                      if (!tagFilters.includes(tag))
+                        tagFilters = [...tagFilters, tag];
                       page = 1;
                       run(load);
                     }}>{tag}</button
@@ -709,15 +773,18 @@
               <label style="flex:1;min-width:200px"
                 >{identifier.scheme.toUpperCase()}
                 <input
+                  id={index === 0 && !form.id ? "scan-isbn" : undefined}
                   bind:value={identifier.value}
+                  oninput={() => scheduleScanSearch(identifier)}
                   onkeydown={(event) => {
                     if (event.key === "Enter") {
                       event.preventDefault();
+                      clearTimeout(scanTimer);
                       search(identifier);
                     }
                   }}
                   maxlength="300"
-                  required
+                  autocomplete="off"
                   placeholder={identifier.scheme === "isbn"
                     ? "ISBN de 10 ou 13 caracteres"
                     : "10.…/…"}
@@ -826,6 +893,14 @@
             </label>{#each fields as field}<label
                 >{field.label}<input bind:value={form[field.key]} /></label
               >{/each}<label
+              >Idioma<SearchSelect
+                options={languageOptions}
+                bind:value={form.language}
+                emptyLabel="Não informado"
+                placeholder="Digite para buscar ou cadastrar"
+                oncreate={createLanguage}
+              /></label
+            ><label
               >Data de acesso<input
                 type="date"
                 value={form.accessed ?? ""}
@@ -940,14 +1015,12 @@
         <section class="card">
           <h2>Exemplares físicos</h2>
           <label
-            >Localização para o próximo exemplar<select bind:value={locationId}
-              ><option value="">Sem exemplar físico / selecionar depois</option
-              >{#each locations as l}<option value={l.id}
-                  >{[l.room, l.bookcase, l.shelf]
-                    .filter(Boolean)
-                    .join(" / ")}</option
-                >{/each}</select
-            ></label
+            >Localização para o próximo exemplar<SearchSelect
+              options={locationOptions}
+              bind:value={locationId}
+              emptyLabel="Sem exemplar físico / selecionar depois"
+              placeholder="Digite ambiente, estante ou prateleira"
+            /></label
           >{#if !locations.length}<p class="muted">
               Cadastre as localizações no menu antes de iniciar uma prateleira.
             </p>{/if}{#if form.id}<button

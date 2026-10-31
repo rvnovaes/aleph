@@ -36,6 +36,27 @@ class Journal(Named):
     issn = models.CharField(max_length=20, blank=True)
 
 
+class Language(models.Model):
+    """Languages offered in the work form. Works store `code` (or the name when no code)."""
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=100, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["owner", "name"], name="unique_owner_language")
+        ]
+
+    @property
+    def value(self):
+        return self.code or self.name
+
+    def __str__(self):
+        return self.name
+
+
 class Tag(Named):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 

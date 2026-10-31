@@ -5,15 +5,15 @@ from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
-from ninja import File, NinjaAPI
+from ninja import File, NinjaAPI, Query
 from ninja.errors import HttpError
 from ninja.files import UploadedFile
 from ninja.security import django_auth
 
 from .connectors import lookup
 from .covers import replace_cover
-from .models import City, Item, Location, Publisher, SourceRecord, Tag, Work
-from .schemas import ItemIn, LocationIn, PublisherIn, WorkIn
+from .models import City, Item, Language, Location, Publisher, SourceRecord, Tag, Work
+from .schemas import ItemIn, LanguageIn, LocationIn, PublisherIn, WorkIn
 from .services import (
     csl,
     csl_data,
@@ -40,7 +40,7 @@ def list_works(
     location: int | None = None,
     kind: str = "",
     pending: bool = False,
-    tag: str | None = None,
+    tag: list[str] = Query([]),
     unlocated: bool = False,
     room: str | None = None,
     bookcase: str | None = None,
@@ -65,8 +65,11 @@ def list_works(
         if bookcase is not None:
             places = places.filter(bookcase=bookcase)
         queryset = queryset.filter(items__location__in=places).distinct()
-    if tag:
-        queryset = queryset.filter(tags__owner=request.user, tags__name=tag).distinct()
+    # Several tags narrow the list: a work must carry every selected tag.
+    for name in {t for t in tag if t}:
+        queryset = queryset.filter(
+            pk__in=Work.objects.filter(tags__owner=request.user, tags__name=name).values("pk")
+        )
     if unlocated:
         queryset = queryset.filter(items__isnull=False, items__location__isnull=True).distinct()
     if kind:
@@ -205,6 +208,52 @@ def tags(request):
         .order_by("name")
         .values_list("name", flat=True)
     )
+
+
+DEFAULT_LANGUAGES = [
+    ("Português", "por"),
+    ("Inglês", "eng"),
+    ("Espanhol", "spa"),
+    ("Francês", "fre"),
+    ("Alemão", "ger"),
+    ("Italiano", "ita"),
+    ("Latim", "lat"),
+    ("Grego antigo", "grc"),
+]
+
+
+@api.get("/languages")
+def languages(request):
+    rows = Language.objects.filter(owner=request.user)
+    if not rows.exists():
+        Language.objects.bulk_create(
+            [Language(owner=request.user, name=n, code=c) for n, c in DEFAULT_LANGUAGES],
+            ignore_conflicts=True,
+        )
+    result = [{"value": row.value, "name": row.name} for row in rows.order_by("name")]
+    known = {row["value"] for row in result}
+    used = (
+        Work.objects.filter(owner=request.user)
+        .exclude(language="")
+        .values_list("language", flat=True)
+        .distinct()
+    )
+    result += [{"value": v, "name": v} for v in sorted(set(used) - known)]
+    return result
+
+
+@api.post("/languages")
+def create_language(request, payload: LanguageIn):
+    name, code = payload.name.strip(), payload.code.strip()
+    if not name:
+        raise HttpError(422, "Informe o nome do idioma.")
+    existing = Language.objects.filter(owner=request.user, name__iexact=name).first()
+    if existing:
+        return {"value": existing.value, "name": existing.name}
+    if code and Language.objects.filter(owner=request.user, code__iexact=code).exists():
+        raise HttpError(409, "Já existe um idioma com esse código.")
+    row = Language.objects.create(owner=request.user, name=name, code=code)
+    return {"value": row.value, "name": row.name}
 
 
 def publisher_data(obj):
