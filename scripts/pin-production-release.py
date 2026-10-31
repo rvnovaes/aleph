@@ -21,10 +21,16 @@ if not any(run["conclusion"] == "success" for run in runs):
 path = root / "deploy/.private/production.json"
 data = json.loads(path.read_text())
 for component in ["backend", "web"]:
-    pages = json.loads(subprocess.check_output([
+    output = subprocess.check_output([
         "gh", "api", f"/user/packages/container/aleph-{component}/versions",
-        "--paginate", "--slurp",
-    ]))
+        "--paginate",
+    ], text=True)
+    pages = []
+    decoder = json.JSONDecoder()
+    while output.strip():
+        page, end = decoder.raw_decode(output.lstrip())
+        pages.append(page)
+        output = output.lstrip()[end:]
     versions = [version for page in pages for version in page]
     selected = next((v for v in versions if args.commit in v["metadata"]["container"]["tags"]), None)
     if not selected:

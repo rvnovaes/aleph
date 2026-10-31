@@ -429,7 +429,11 @@
           <small>MEU ACERVO</small>
           <div class="library-heading">
             <h1>Minha biblioteca</h1>
-            <span class="library-count" aria-label="Total de cadastros no acervo">{totalCount.toLocaleString("pt-BR")} cadastros</span>
+            <span
+              class="library-count"
+              aria-label="Total de cadastros no acervo"
+              >{totalCount.toLocaleString("pt-BR")} cadastros</span
+            >
           </div>
           <p class="muted">
             {count} registros · livros, artigos e leituras digitais
@@ -1114,6 +1118,17 @@
 </dialog>
 
 <style>
-  .library-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; }
-  .library-count { font-size: 0.9rem; font-weight: 600; border: 1px solid currentColor; border-radius: 999px; padding: 0.25rem 0.65rem; }
+  .library-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+  .library-count {
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    padding: 0.25rem 0.65rem;
+  }
 </style>

@@ -91,3 +91,30 @@ def test_migration_leaves_ambiguous_default_empty(user):
     )
     pub.refresh_from_db()
     assert pub.owner == user and pub.default_city is None
+
+
+def test_merge_moves_works_preserves_city_and_reference(authenticated, user):
+    city = City.objects.create(name="Cidade original")
+    source = Publisher.objects.create(owner=user, name="Duplicada")
+    target = Publisher.objects.create(owner=user, name="Mantida")
+    work = Work.objects.create(owner=user, title="Livro", kind="book", publisher=source, city=city, abnt_reference="Referência revisada")
+    response = authenticated.post(f"/api/v1/publishers/{target.pk}/merge/{source.pk}", data="{}", content_type="application/json")
+    assert response.status_code == 200
+    assert response.json()["moved"] == 1
+    work.refresh_from_db()
+    assert work.publisher_id == target.pk
+    assert work.city == city
+    assert work.abnt_reference == "Referência revisada"
+    assert not Publisher.objects.filter(pk=source.pk).exists()
+    assert work.sources.filter(source="Fusão de editoras").exists()
+
+
+def test_merge_rejects_same_publisher_and_other_users(authenticated, user):
+    source = Publisher.objects.create(owner=user, name="Minha")
+    other = get_user_model().objects.create_user(username="merge-other")
+    foreign = Publisher.objects.create(owner=other, name="Privada")
+    assert authenticated.post(f"/api/v1/publishers/{source.pk}/merge/{source.pk}").status_code == 422
+    assert authenticated.post(f"/api/v1/publishers/{foreign.pk}/merge/{source.pk}").status_code == 404
+    assert authenticated.post(f"/api/v1/publishers/{source.pk}/merge/{foreign.pk}").status_code == 404
+    assert Publisher.objects.filter(pk=source.pk).exists()
+    assert Publisher.objects.filter(pk=foreign.pk).exists()

@@ -12,7 +12,7 @@ from ninja.security import django_auth
 
 from .connectors import lookup
 from .covers import replace_cover
-from .models import City, Item, Location, Publisher, Tag, Work
+from .models import City, Item, Location, Publisher, SourceRecord, Tag, Work
 from .schemas import ItemIn, LocationIn, PublisherIn, WorkIn
 from .services import (
     csl,
@@ -262,6 +262,31 @@ def create_publisher(request, payload: PublisherIn):
 @api.put("/publishers/{publisher_id}")
 def update_publisher(request, publisher_id: int, payload: PublisherIn):
     return write_publisher(request.user, payload, publisher_id)
+
+
+@api.post("/publishers/{target_id}/merge/{source_id}")
+def merge_publishers(request, target_id: int, source_id: int):
+    if target_id == source_id:
+        raise HttpError(422, "Selecione duas editoras diferentes.")
+    with transaction.atomic():
+        get_user_model().objects.select_for_update().get(pk=request.user.pk)
+        rows = Publisher.objects.select_for_update().filter(owner=request.user)
+        target = get_object_or_404(rows, pk=target_id)
+        source = get_object_or_404(rows, pk=source_id)
+        if Work.objects.filter(publisher=source).exclude(owner=request.user).exists():
+            raise HttpError(409, "Editora vinculada a registros de outro usuário.")
+        works = Work.objects.filter(owner=request.user, publisher=source)
+        count = works.count()
+        SourceRecord.objects.bulk_create([
+            SourceRecord(work=work, source="Fusão de editoras", query=str(source.pk), raw={
+                "source_id": source.pk, "source_name": source.name,
+                "source_city": source.default_city.name if source.default_city_id else "",
+                "target_id": target.pk, "target_name": target.name,
+            }) for work in works
+        ])
+        works.update(publisher=target)
+        source.delete()
+    return {"moved": count, "publisher": publisher_data(target)}
 
 
 @api.post("/citation-preview")

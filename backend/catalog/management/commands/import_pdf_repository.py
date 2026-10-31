@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import signal
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -16,6 +17,33 @@ from catalog.connectors import lookup
 from catalog.models import Document, ImportRecord, SourceRecord
 from catalog.schemas import WorkIn
 from catalog.services import save_work
+
+
+class PDFTimeout(BaseException):
+    """Bypass broad exception handlers inside PDF recovery code."""
+
+
+def pdf_pages(path, row):
+    def timeout(signum, frame):
+        raise PDFTimeout("PDF page tree took too long")
+
+    previous = signal.signal(signal.SIGALRM, timeout)
+    signal.alarm(30)
+    try:
+        reader = PdfReader(str(path))
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise ValueError("Password-protected PDF")
+        return len(reader.pages)
+    except PDFTimeout:
+        # Poppler already opened this exact file during extraction; keep the original.
+        pages = int(row.get("metadata", {}).get("Pages", 0))
+        if not pages:
+            raise ValueError("PDF page tree timeout and no Poppler page count")
+        row["parser_warning"] = "pypdf timeout; page count validated by Poppler"
+        return pages
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 class Command(BaseCommand):
@@ -50,10 +78,8 @@ class Command(BaseCommand):
                 if previous:
                     result.update(status="already-imported", work_id=previous.work_id)
                 else:
-                    reader = PdfReader(str(path))
-                    if reader.is_encrypted and not reader.decrypt(""):
-                        raise ValueError("Password-protected PDF")
-                    if not len(reader.pages):
+                    pages = pdf_pages(path, row)
+                    if not pages:
                         raise ValueError("Empty PDF")
                     existing = Document.objects.filter(work__owner=user, sha256=digest).first()
                     if existing:
@@ -65,7 +91,7 @@ class Command(BaseCommand):
                             "title": row["title"],
                             "authors": [{"name": row["author"]}] if row.get("author") else [],
                             "pending": True,
-                            "pages": str(len(reader.pages)),
+                            "pages": str(pages),
                             "private_notes": "Importado do repositório pessoal: "
                             + row["path"]
                             + "\nMetadados extraídos automaticamente; revisar título, autoria, tipo e edição.",
