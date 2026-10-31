@@ -6,19 +6,31 @@ test("cadastro abre pronto para o leitor e busca ao ler o ISBN", async ({
   page,
 }) => {
   const lookups: string[] = [];
-  await page.route("**/api/v1/lookup?**", (route) => {
+  // The search streams progress events; answer with a short, fixed stream.
+  await page.route("**/api/v1/lookup/stream?**", (route) => {
     lookups.push(new URL(route.request().url()).searchParams.get("value")!);
-    return route.fulfill({
-      json: {
+    const events = [
+      { type: "plan", steps: ["UFSC", "UFMG", "Open Library"] },
+      { type: "step", source: "UFSC", status: "running" },
+      { type: "step", source: "UFSC", status: "done", count: 0 },
+      { type: "step", source: "UFMG", status: "running" },
+      { type: "step", source: "UFMG", status: "done", count: 1 },
+      { type: "step", source: "Open Library", status: "skipped" },
+      {
+        type: "result",
         candidates: [
           {
-            source: "Teste",
+            source: "Zeus · UFMG",
             data: { title: "Livro lido pelo leitor", authors: [] },
           },
         ],
         key: "",
         warnings: [],
       },
+    ];
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""),
     });
   });
   await page.goto("/");
@@ -37,6 +49,11 @@ test("cadastro abre pronto para o leitor e busca ao ler o ISBN", async ({
   await page.keyboard.type("9788535912258", { delay: 5 });
   await page.keyboard.press("Enter");
   await expect(page.getByText("Livro lido pelo leitor")).toBeVisible();
+  const panel = page.getByLabel("Andamento da busca");
+  await expect(panel).toContainText("Busca concluída");
+  await expect(panel).toContainText("UFSC: não encontrado");
+  await expect(panel).toContainText("UFMG: 1 resultado");
+  await expect(panel).toContainText("Demais fontes não consultadas");
   await page.waitForTimeout(500);
   expect(lookups).toEqual(["9788535912258"]);
 

@@ -81,3 +81,28 @@ test("idioma cadastrável, etiquetas múltiplas e localização pesquisável", a
   await page.keyboard.press("Escape");
   expect(errors).toEqual([]);
 });
+
+test("exclui editora só quando não tem cadastros", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("Usuário", { exact: true }).fill(credentials.username);
+  await page.getByLabel("Senha", { exact: true }).fill(credentials.password);
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
+  await page.getByRole("button", { name: "Editoras", exact: true }).click();
+  await page.getByLabel("Nome da editora").fill("Editora vazia de teste");
+  await page.getByRole("button", { name: "Cadastrar editora" }).click();
+  await expect(page.getByText("Editora salva.")).toBeVisible();
+  // The publisher created by the catalog test has a book: button stays disabled.
+  await expect(
+    page.getByRole("button", { name: "Excluir Editora de teste", exact: true }),
+  ).toBeDisabled();
+  page.once("dialog", (d) => d.accept());
+  await page
+    .getByRole("button", { name: "Excluir Editora vazia de teste" })
+    .click();
+  await expect(page.getByRole("status").first()).toContainText(
+    "Editora “Editora vazia de teste” excluída",
+  );
+  await expect(
+    page.locator("article strong", { hasText: "Editora vazia de teste" }),
+  ).toHaveCount(0);
+});

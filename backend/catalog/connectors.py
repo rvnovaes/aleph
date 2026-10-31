@@ -1,7 +1,9 @@
+import io
 import os
 import re
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -9,7 +11,7 @@ from urllib.parse import quote
 import httpx
 from django.db import transaction
 from django.utils import timezone
-from pymarc import MARCReader
+from pymarc import MARCReader, parse_xml_to_array
 
 from .models import LookupCache
 from .services import normalize_identifier
@@ -120,6 +122,130 @@ def ufsc(isbn):
         return candidates
 
 
+# Zeus (UFSC) queries these libraries over Z39.50 and returns MARCXML in its page.
+# The position is Zeus' target index; names are shown in the search progress.
+ZEUS_URL = "https://catalogo.bu.ufsc.br/zeus/"
+ZEUS_LIBRARIES = [
+    "Biblioteca Nacional",
+    "Fundacentro",
+    "Senado Federal (Aleph)",
+    "Senado Federal (Folio)",
+    "USP",
+    "UERJ",
+    "UNICAMP",
+    "UNESP",
+    "UFG",
+    "UFMG",
+    "UFPE",
+    "UFSC (Zeus)",
+    "UFSCar",
+    "UNIFESP",
+    "UFU",
+    "UFPR",
+    "UFRGS",
+    "UFF",
+    "UTFPR",
+]
+ZEUS_SECTION = re.compile(r'data-z39-target-idx="(\d+)"')
+ZEUS_RECORD = re.compile(r"<record xmlns=\"http://www.loc.gov/MARC21/slim\">.*?</record>", re.S)
+ZEUS_PARALLEL = 10
+
+
+def parse_zeus(page):
+    """(target index, candidate) pairs found in a Zeus result page."""
+    parts = ZEUS_SECTION.split(page)
+    found = []
+    for idx, chunk in zip(parts[1::2], parts[2::2]):
+        idx = int(idx)
+        library = ZEUS_LIBRARIES[idx] if idx < len(ZEUS_LIBRARIES) else "Zeus"
+        for xml in ZEUS_RECORD.findall(chunk):
+            try:
+                records = parse_xml_to_array(io.BytesIO(xml.encode("utf-8")))
+            except Exception:
+                continue
+            for record in records:
+                if record and record.get("245"):
+                    candidate = marc_candidate(record)
+                    candidate["source"] = f"Zeus · {library}"
+                    found.append((idx, candidate))
+    return found
+
+
+def rank_zeus(found, limit=10):
+    """Newest printing first, then Biblioteca Nacional first; one entry per year/edition.
+
+    Publishers often reuse one ISBN across reprints, so several editions may be listed.
+    """
+    found = sorted(found, key=lambda pair: (-(pair[1]["data"]["year"] or 0), pair[0]))
+    result, seen = [], set()
+    for _, candidate in found:
+        data = candidate["data"]
+        key = (data["title"].casefold(), data["year"], data["edition"].casefold())
+        if key not in seen:
+            seen.add(key)
+            result.append(candidate)
+    return result[:limit]
+
+
+def zeus_candidates(page, limit=10):
+    return rank_zeus(parse_zeus(page), limit)
+
+
+def zeus_library(isbn, idx):
+    """Ask Zeus about one library, so progress can be shown library by library."""
+    response = httpx.get(
+        ZEUS_URL,
+        params={
+            "searchString": isbn,
+            "searchType": "7",
+            "operator": "and",
+            f"targets[{idx}]": "on",
+        },
+        timeout=httpx.Timeout(25, connect=10),
+        headers={"User-Agent": "Aleph catalogo pessoal (consulta por ISBN)"},
+    )
+    response.raise_for_status()
+    return parse_zeus(response.text)
+
+
+LOC_SRU = "http://lx2.loc.gov:210/lcdb"  # official SRU service (no HTTPS on this port)
+
+
+def isbn10(isbn):
+    if not isbn.startswith("978") or len(isbn) != 13:
+        return None
+    stem = isbn[3:12]
+    check = (-sum((10 - i) * int(n) for i, n in enumerate(stem))) % 11
+    return stem + ("X" if check == 10 else str(check))
+
+
+def library_of_congress(isbn):
+    isbn = normalize_identifier("isbn", isbn)
+    query = f"bath.isbn={isbn}"
+    if isbn10(isbn):
+        query += f" or bath.isbn={isbn10(isbn)}"
+    response = httpx.get(
+        LOC_SRU,
+        params={
+            "version": "1.1",
+            "operation": "searchRetrieve",
+            "query": query,
+            "maximumRecords": "5",
+            "recordSchema": "marcxml",
+        },
+        timeout=httpx.Timeout(20, connect=10),
+    )
+    response.raise_for_status()
+    candidates = []
+    for xml in ZEUS_RECORD.findall(response.text):
+        for record in parse_xml_to_array(io.BytesIO(xml.encode("utf-8"))):
+            if record and record.get("245"):
+                candidate = marc_candidate(record)
+                candidate["source"] = "Library of Congress"
+                candidates.append(candidate)
+    return candidates
+
+
 def json_get(url):
     contact = os.getenv("CONTACT_EMAIL", "")
     response = httpx.get(
@@ -200,33 +326,110 @@ def crossref(doi):
     ]
 
 
-def lookup(scheme, value):
+SOURCE_ERRORS = (httpx.HTTPError, subprocess.SubprocessError, OSError, ValueError, KeyError)
+
+
+def take_turn(name):
+    """Persistent source cooldown, shared by gunicorn workers. False when too soon."""
+    with transaction.atomic():
+        gate, _ = LookupCache.objects.get_or_create(
+            key=f"rate:{name}", defaults={"expires_at": timezone.now()}
+        )
+        gate = LookupCache.objects.select_for_update().get(pk=gate.pk)
+        if gate.expires_at > timezone.now():
+            return False
+        gate.expires_at = timezone.now() + timedelta(seconds=2)
+        gate.save()
+    return True
+
+
+def lookup_steps(scheme):
+    if scheme == "isbn":
+        return ["UFSC", *ZEUS_LIBRARIES, "Open Library", "Library of Congress"]
+    return ["Crossref"]
+
+
+def lookup_events(scheme, value):
+    """Search the sources in order, yielding progress events; the last one is the result.
+
+    Events: {"type": "plan", "steps": [...]}, {"type": "step", "source", "status",
+    "count"?}, {"type": "candidates", "items"} and finally {"type": "result", ...}.
+    Sources after the first one that finds something are reported as skipped.
+    """
     key = f"{scheme}:{value}"
+    steps = lookup_steps(scheme)
+    yield {"type": "plan", "steps": steps}
     cached = LookupCache.objects.filter(key=key, expires_at__gt=timezone.now()).first()
     if cached:
-        return {**cached.result, "key": key}
+        for name in steps:
+            yield {"type": "step", "source": name, "status": "cached"}
+        yield {"type": "result", **cached.result, "key": key, "cached": True}
+        return
     candidates, warnings = [], []
-    for name, connector in (
-        [("UFSC", ufsc), ("Open Library", openlibrary)]
-        if scheme == "isbn"
-        else [("Crossref", crossref)]
-    ):
-        # Persistent source cooldown, shared by gunicorn workers.
-        with transaction.atomic():
-            gate, _ = LookupCache.objects.get_or_create(
-                key=f"rate:{name}", defaults={"expires_at": timezone.now()}
-            )
-            gate = LookupCache.objects.select_for_update().get(pk=gate.pk)
-            if gate.expires_at > timezone.now():
-                warnings.append(f"{name}: aguarde alguns segundos antes de consultar novamente.")
-                continue
-            gate.expires_at = timezone.now() + timedelta(seconds=2)
-            gate.save()
+
+    def single(name, connector):
+        nonlocal candidates
+        if not take_turn(name):
+            warnings.append(f"{name}: aguarde alguns segundos antes de consultar novamente.")
+            yield {"type": "step", "source": name, "status": "busy"}
+            return
+        yield {"type": "step", "source": name, "status": "running"}
         try:
             candidates = connector(value)
-        except (httpx.HTTPError, subprocess.SubprocessError, OSError, ValueError, KeyError):
+        except SOURCE_ERRORS:
             warnings.append(f"{name}: serviço indisponível ou resposta não reconhecida.")
+            yield {"type": "step", "source": name, "status": "error"}
+            return
+        yield {"type": "step", "source": name, "status": "done", "count": len(candidates)}
         if candidates:
+            yield {"type": "candidates", "items": candidates}
+
+    def zeus_all():
+        nonlocal candidates
+        if not take_turn("Zeus"):
+            warnings.append("Zeus: aguarde alguns segundos antes de consultar novamente.")
+            for name in ZEUS_LIBRARIES:
+                yield {"type": "step", "source": name, "status": "busy"}
+            return
+        isbn = normalize_identifier("isbn", value)
+        for name in ZEUS_LIBRARIES:
+            yield {"type": "step", "source": name, "status": "running"}
+        found, failed = [], 0
+        with ThreadPoolExecutor(max_workers=ZEUS_PARALLEL) as pool:
+            jobs = {pool.submit(zeus_library, isbn, i): i for i in range(len(ZEUS_LIBRARIES))}
+            for job in as_completed(jobs):
+                name = ZEUS_LIBRARIES[jobs[job]]
+                try:
+                    pairs = job.result()
+                except SOURCE_ERRORS:
+                    failed += 1
+                    yield {"type": "step", "source": name, "status": "error"}
+                    continue
+                found += pairs
+                yield {"type": "step", "source": name, "status": "done", "count": len(pairs)}
+                if pairs:
+                    yield {"type": "candidates", "items": rank_zeus(found)}
+        candidates = rank_zeus(found)
+        if failed and not candidates:
+            warnings.append(f"Zeus: {failed} biblioteca(s) não responderam.")
+
+    plan = (
+        [
+            ("UFSC", lambda: single("UFSC", ufsc)),
+            ("Zeus", zeus_all),
+            ("Open Library", lambda: single("Open Library", openlibrary)),
+            ("Library of Congress", lambda: single("Library of Congress", library_of_congress)),
+        ]
+        if scheme == "isbn"
+        else [("Crossref", lambda: single("Crossref", crossref))]
+    )
+    for position, (name, run) in enumerate(plan):
+        yield from run()
+        if candidates:
+            for later, _ in plan[position + 1 :]:
+                names = ZEUS_LIBRARIES if later == "Zeus" else [later]
+                for skipped in names:
+                    yield {"type": "step", "source": skipped, "status": "skipped"}
             break
     result = {"candidates": candidates, "warnings": warnings}
     if candidates or not warnings:
@@ -237,4 +440,13 @@ def lookup(scheme, value):
                 "expires_at": timezone.now() + timedelta(days=7 if candidates else 1),
             },
         )
-    return {**result, "key": key}
+    yield {"type": "result", **result, "key": key}
+
+
+def lookup(scheme, value):
+    result = None
+    for event in lookup_events(scheme, value):
+        result = event
+    result.pop("type")
+    result.pop("cached", None)
+    return result

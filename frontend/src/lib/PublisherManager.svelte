@@ -71,6 +71,25 @@
     notice = "";
     document.getElementById("publisher-name")?.focus();
   }
+  async function remove(p: Publisher) {
+    if (p.work_count) return;
+    if (!confirm(`Excluir a editora “${p.name}”? Esta ação não pode ser desfeita.`))
+      return;
+    busy = true;
+    error = "";
+    notice = "";
+    try {
+      await request(`/v1/publishers/${p.id}`, "DELETE");
+      selected = selected.filter((n) => n !== p.id);
+      if (id === p.id) edit();
+      await onChanged();
+      notice = `Editora “${p.name}” excluída.`;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
   async function save(event: SubmitEvent) {
     event.preventDefault();
     busy = true;
@@ -240,12 +259,23 @@
           livros/artigos
         </div>
       </div>
-      <button
-        class="secondary"
-        onclick={() => edit(publisher)}
-        disabled={busy}
-        aria-label={"Editar " + publisher.name}>Editar</button
-      >
+      <div class="actions">
+        <button
+          class="secondary"
+          onclick={() => edit(publisher)}
+          disabled={busy}
+          aria-label={"Editar " + publisher.name}>Editar</button
+        >
+        <button
+          class="secondary danger"
+          onclick={() => remove(publisher)}
+          disabled={busy || publisher.work_count > 0}
+          title={publisher.work_count > 0
+            ? "Só é possível excluir editoras sem livros ou artigos"
+            : "Excluir editora"}
+          aria-label={"Excluir " + publisher.name}>Excluir</button
+        >
+      </div>
     </article>
   {/each}
   {#if visible.length}{@render pagination(

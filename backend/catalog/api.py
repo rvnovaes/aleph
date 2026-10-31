@@ -1,16 +1,18 @@
+import json
 from typing import Literal
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import Count, Q
+from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from ninja import File, NinjaAPI, Query
 from ninja.errors import HttpError
 from ninja.files import UploadedFile
 from ninja.security import django_auth
 
-from .connectors import lookup
+from .connectors import lookup, lookup_events, lookup_steps
 from .covers import replace_cover
 from .models import City, Item, Language, Location, Publisher, SourceRecord, Tag, Work
 from .schemas import ItemIn, LanguageIn, LocationIn, PublisherIn, WorkIn
@@ -162,8 +164,13 @@ def upload(request, work_id: int, file: File[UploadedFile]):
     return {"id": document.id}
 
 
-@api.get("/lookup")
-def search_external(request, scheme: Literal["isbn", "doi"], value: str, enrich: bool = False):
+def public_candidates(items):
+    # Raw source responses stay server-side until a candidate is selected.
+    return [{"source": c["source"], "data": c["data"]} for c in items]
+
+
+def lookup_target(request, scheme, value, enrich):
+    """Normalized value and the work already holding it (unless enriching an existing one)."""
     try:
         value = normalize_identifier(scheme, value)
     except ValueError as exc:
@@ -173,14 +180,44 @@ def search_external(request, scheme: Literal["isbn", "doi"], value: str, enrich:
         .filter(identifiers__scheme=scheme, identifiers__value=value)
         .first()
     )
-    if existing and not enrich:
+    return value, (existing if existing and not enrich else None)
+
+
+@api.get("/lookup")
+def search_external(request, scheme: Literal["isbn", "doi"], value: str, enrich: bool = False):
+    value, existing = lookup_target(request, scheme, value, enrich)
+    if existing:
         return {"existing_id": existing.id, "candidates": [], "warnings": []}
     result = lookup(scheme, value)
-    # Raw source responses stay server-side until a candidate is selected.
-    return {
-        **result,
-        "candidates": [{"source": c["source"], "data": c["data"]} for c in result["candidates"]],
-    }
+    return {**result, "candidates": public_candidates(result["candidates"])}
+
+
+@api.get("/lookup/stream")
+def search_external_stream(
+    request, scheme: Literal["isbn", "doi"], value: str, enrich: bool = False
+):
+    """Same search as /lookup, sent as server-sent events while each source answers."""
+    value, existing = lookup_target(request, scheme, value, enrich)
+
+    def events():
+        if existing:
+            yield {"type": "plan", "steps": lookup_steps(scheme)}
+            yield {"type": "result", "existing_id": existing.id, "candidates": [], "warnings": []}
+            return
+        for event in lookup_events(scheme, value):
+            if event["type"] == "candidates":
+                event = {**event, "items": public_candidates(event["items"])}
+            elif event["type"] == "result":
+                event = {**event, "candidates": public_candidates(event["candidates"])}
+            yield event
+
+    response = StreamingHttpResponse(
+        (f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events()),
+        content_type="text/event-stream; charset=utf-8",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"  # let nginx pass each event at once
+    return response
 
 
 @api.post("/works/{work_id}/cover")
@@ -313,6 +350,23 @@ def update_publisher(request, publisher_id: int, payload: PublisherIn):
     return write_publisher(request.user, payload, publisher_id)
 
 
+@api.delete("/publishers/{publisher_id}")
+def delete_publisher(request, publisher_id: int):
+    with transaction.atomic():
+        obj = get_object_or_404(
+            Publisher.objects.select_for_update(), owner=request.user, pk=publisher_id
+        )
+        count = Work.objects.filter(publisher=obj).count()
+        if count:
+            raise HttpError(
+                409,
+                f"A editora tem {count} livro(s)/artigo(s). "
+                "Mude a editora desses cadastros ou funda as editoras antes de excluir.",
+            )
+        obj.delete()
+    return {"deleted": publisher_id}
+
+
 @api.post("/publishers/{target_id}/merge/{source_id}")
 def merge_publishers(request, target_id: int, source_id: int):
     if target_id == source_id:
@@ -326,13 +380,23 @@ def merge_publishers(request, target_id: int, source_id: int):
             raise HttpError(409, "Editora vinculada a registros de outro usuário.")
         works = Work.objects.filter(owner=request.user, publisher=source)
         count = works.count()
-        SourceRecord.objects.bulk_create([
-            SourceRecord(work=work, source="Fusão de editoras", query=str(source.pk), raw={
-                "source_id": source.pk, "source_name": source.name,
-                "source_city": source.default_city.name if source.default_city_id else "",
-                "target_id": target.pk, "target_name": target.name,
-            }) for work in works
-        ])
+        SourceRecord.objects.bulk_create(
+            [
+                SourceRecord(
+                    work=work,
+                    source="Fusão de editoras",
+                    query=str(source.pk),
+                    raw={
+                        "source_id": source.pk,
+                        "source_name": source.name,
+                        "source_city": source.default_city.name if source.default_city_id else "",
+                        "target_id": target.pk,
+                        "target_name": target.name,
+                    },
+                )
+                for work in works
+            ]
+        )
         works.update(publisher=target)
         source.delete()
     return {"moved": count, "publisher": publisher_data(target)}

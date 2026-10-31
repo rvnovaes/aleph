@@ -4,7 +4,13 @@
   import type { Publisher } from "$lib/api";
   import ThemeToggle from "$lib/ThemeToggle.svelte";
   import { onMount } from "svelte";
-  import { blankWork, request, type Work, type Location } from "$lib/api";
+  import {
+    blankWork,
+    request,
+    streamEvents,
+    type Work,
+    type Location,
+  } from "$lib/api";
   import { bibliography, bibliographyFromForm } from "$lib/citations";
   import ItemFields from "$lib/ItemFields.svelte";
   import SearchSelect from "$lib/SearchSelect.svelte";
@@ -246,21 +252,89 @@
       candidates = [];
     });
   }
+  // Live search progress: one row per source, plus a readable log.
+  type Progress = {
+    steps: string[];
+    status: Record<string, string>;
+    log: string[];
+    group: string[];
+    done: boolean;
+  };
+  let progress = $state<Progress | null>(null);
+  let progressLog = $state<HTMLElement>();
+  const finished = $derived(
+    progress
+      ? progress.steps.filter(
+          (s) => progress!.status[s] && progress!.status[s] !== "running",
+        ).length
+      : 0,
+  );
+  function addLog(line: string, grouped = false) {
+    if (!progress) return;
+    progress.log.push(line);
+    if (!grouped) progress.group = [];
+    setTimeout(() => progressLog?.scrollTo({ top: progressLog.scrollHeight }), 0);
+  }
+  function onStep(e: { source: string; status: string; count?: number }) {
+    const p = progress!;
+    p.status[e.source] = e.status;
+    if (e.status === "running") {
+      // Many sources start together (Zeus): keep them on one line.
+      if (p.group.length) p.log.pop();
+      p.group.push(e.source);
+      addLog(
+        p.group.length === 1
+          ? `Consultando ${e.source}…`
+          : `Consultando ${p.group.length} bibliotecas pelo Zeus…`,
+        true,
+      );
+      return;
+    }
+    p.group = [];
+    if (e.status === "done")
+      addLog(
+        e.count
+          ? `${e.source}: ${e.count} resultado${e.count > 1 ? "s" : ""}`
+          : `${e.source}: não encontrado`,
+      );
+    else if (e.status === "error") addLog(`${e.source}: não respondeu`);
+    else if (e.status === "busy")
+      addLog(`${e.source}: aguarde alguns segundos e tente de novo`);
+  }
   async function search(identifier: { scheme: string; value: string }) {
     if (busy || !identifier.value.trim()) return;
     const { scheme, value } = identifier;
     await run(async () => {
       candidates = [];
       candidateKey = "";
-      const r = await request(
-        "/v1/lookup?" +
-          new URLSearchParams({
-            scheme,
-            value: value.trim(),
-            enrich: String(Boolean(form.id)),
-          }),
-      );
+      progress = { steps: [], status: {}, log: [], group: [], done: false };
+      let r: {
+        existing_id?: number;
+        candidates: typeof candidates;
+        warnings: string[];
+        key?: string;
+        cached?: boolean;
+      } | null = null;
+      const query = new URLSearchParams({
+        scheme,
+        value: value.trim(),
+        enrich: String(Boolean(form.id)),
+      });
+      for await (const e of streamEvents("/v1/lookup/stream?" + query)) {
+        if (e.type === "plan") progress.steps = e.steps;
+        else if (e.type === "step" && e.status === "cached")
+          progress.status[e.source] = "cached";
+        else if (e.type === "step") onStep(e);
+        else if (e.type === "candidates") candidates = e.items;
+        else if (e.type === "result") r = e;
+      }
+      if (!r) throw new Error("A busca terminou sem resposta.");
+      progress.done = true;
+      if (r.cached) addLog("Resultado consultado há pouco (guardado em cache).");
+      else if (Object.values(progress.status).includes("skipped"))
+        addLog("Demais fontes não consultadas: já há resultado.");
       if (r.existing_id) {
+        progress = null;
         form = await request("/v1/works/" + r.existing_id);
         notice = "Já está no catálogo. Adicione outra cópia se necessário.";
         candidates = [];
@@ -268,6 +342,11 @@
       }
       candidates = r.candidates;
       candidateKey = r.key || "";
+      addLog(
+        candidates.length
+          ? `Pronto: ${candidates.length} ficha${candidates.length > 1 ? "s" : ""} para escolher.`
+          : "Pronto: nenhuma fonte encontrou este código.",
+      );
       notice =
         r.warnings.join(" ") ||
         (candidates.length
@@ -278,6 +357,9 @@
         if (!form.title) form.title = "Cadastro pendente — " + value;
       }
     });
+    // A search that failed before any source answered leaves no panel behind.
+    if (progress && !progress.steps.length) progress = null;
+    else if (progress && !progress.done) progress.done = true;
   }
   function choose(index: number) {
     const candidate = candidates[index];
@@ -825,6 +907,27 @@
               >+ DOI</button
             >
           </div>
+          {#if progress}
+            <div class="lookup-progress" aria-label="Andamento da busca">
+              <div class="lookup-progress-head">
+                <span
+                  >{progress.done
+                    ? "Busca concluída"
+                    : progress.log.at(-1) || "Iniciando a busca…"}</span
+                >
+                <span class="muted"
+                  >{finished} de {progress.steps.length} fontes</span
+                >
+              </div>
+              <progress
+                max={progress.steps.length || 1}
+                value={progress.done ? progress.steps.length : finished}
+              ></progress>
+              <ol bind:this={progressLog} role="log" aria-live="polite">
+                {#each progress.log as line}<li>{line}</li>{/each}
+              </ol>
+            </div>
+          {/if}
           {#each candidates as candidate, index}<div
               class="card"
               style="margin-top:1rem"

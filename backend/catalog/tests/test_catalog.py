@@ -163,6 +163,7 @@ def test_lookup_fallback_and_cache(authenticated):
     }
     with (
         patch("catalog.connectors.ufsc", side_effect=OSError),
+        patch("catalog.connectors.zeus_library", return_value=[]),
         patch("catalog.connectors.openlibrary", return_value=[candidate]) as external,
     ):
         response = authenticated.get("/api/v1/lookup?scheme=isbn&value=0140328726")

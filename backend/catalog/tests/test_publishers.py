@@ -118,3 +118,22 @@ def test_merge_rejects_same_publisher_and_other_users(authenticated, user):
     assert authenticated.post(f"/api/v1/publishers/{source.pk}/merge/{foreign.pk}").status_code == 404
     assert Publisher.objects.filter(pk=source.pk).exists()
     assert Publisher.objects.filter(pk=foreign.pk).exists()
+
+
+def test_delete_only_publishers_without_works(authenticated, user):
+    empty = Publisher.objects.create(owner=user, name="Sem livros")
+    used = Publisher.objects.create(owner=user, name="Com livro")
+    save_work(user, WorkIn(title="Livro", publisher_id=used.id))
+    other = get_user_model().objects.create_user(username="other-del", password="x")
+    foreign = Publisher.objects.create(owner=other, name="Alheia")
+
+    blocked = authenticated.delete(f"/api/v1/publishers/{used.id}")
+    assert blocked.status_code == 409
+    assert "1 livro" in blocked.json()["detail"]
+    assert Publisher.objects.filter(pk=used.id).exists()
+
+    assert authenticated.delete(f"/api/v1/publishers/{foreign.id}").status_code == 404
+    assert Publisher.objects.filter(pk=foreign.id).exists()
+
+    assert authenticated.delete(f"/api/v1/publishers/{empty.id}").status_code == 200
+    assert not Publisher.objects.filter(pk=empty.id).exists()

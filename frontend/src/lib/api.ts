@@ -133,3 +133,31 @@ export async function request(path: string, method = "GET", body?: unknown) {
   if (data.csrf) csrf = data.csrf;
   return data;
 }
+// Reads a server-sent events response ("data: {json}\n\n") as it arrives.
+export async function* streamEvents(path: string) {
+  const response = await fetch("/api" + path, {
+    headers: { Accept: "text/event-stream" },
+  });
+  if (!response.ok || !response.body) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : "Não foi possível concluir a busca.",
+    );
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const chunk = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      if (chunk.startsWith("data: ")) yield JSON.parse(chunk.slice(6));
+    }
+    if (done) return;
+  }
+}
