@@ -46,6 +46,7 @@ def list_works(
     unlocated: bool = False,
     room: str | None = None,
     bookcase: str | None = None,
+    media: str = "",
 ):
     queryset = work_queryset(request.user)
     total_count = queryset.count()
@@ -76,6 +77,11 @@ def list_works(
         queryset = queryset.filter(items__isnull=False, items__location__isnull=True).distinct()
     if kind:
         queryset = queryset.filter(kind=kind)
+    # "pdf": has an attached PDF; "physical": has at least one copy on a shelf.
+    if media == "pdf":
+        queryset = queryset.filter(documents__isnull=False).distinct()
+    elif media == "physical":
+        queryset = queryset.filter(items__isnull=False).distinct()
     if pending:
         queryset = queryset.filter(pending=True)
     page = max(1, page)

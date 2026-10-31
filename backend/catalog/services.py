@@ -23,6 +23,31 @@ from .models import (
 )
 
 
+def clean_edition(value):
+    """Edition number only: the ABNT style adds "ed." itself ("78. ed." -> "78").
+
+    Text without a number (or with only a year) becomes empty.
+    """
+    for number in re.findall(r"\d+", value or ""):
+        if int(number) < 1000:
+            return str(int(number))
+    return ""
+
+
+def clean_pages(value, kind="book"):
+    """Pages as digits only: "143 p." -> "143"; articles keep a range ("10-20")."""
+    value = value or ""
+    if kind == "article-journal":
+        span = re.search(r"(\d+)\s*[-–—]+\s*(\d+)", value)
+        if span:
+            return f"{int(span[1])}-{int(span[2])}"
+    before_p = re.search(r"(\d+)\s*(?:p\b|pp\b|pág|pag|f\.)", value, re.IGNORECASE)
+    if before_p:
+        return str(int(before_p[1]))
+    numbers = [int(n) for n in re.findall(r"\d+", value)]
+    return str(max(numbers)) if numbers else ""
+
+
 def normalize_identifier(scheme, value):
     if scheme == "doi":
         value = re.sub(
@@ -161,6 +186,8 @@ def save_work(user, payload, work_id=None):
     )
     if "abnt_reference" not in payload.model_fields_set:
         values.pop("abnt_reference", None)
+    values["edition"] = clean_edition(values["edition"])
+    values["pages"] = clean_pages(values["pages"], values["kind"])
     if values["url"] and not values["url"].startswith(("https://", "http://")):
         raise HttpError(422, "URL deve começar com http:// ou https://.")
     normalized = []

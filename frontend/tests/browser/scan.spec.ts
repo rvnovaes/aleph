@@ -21,7 +21,16 @@ test("cadastro abre pronto para o leitor e busca ao ler o ISBN", async ({
         candidates: [
           {
             source: "Zeus · UFMG",
-            data: { title: "Livro lido pelo leitor", authors: [] },
+            data: {
+              title: "Livro lido pelo leitor",
+              authors: [],
+              edition: "78. ed.",
+              pages: "xii, 143 p.",
+            },
+          },
+          {
+            source: "Zeus · USP",
+            data: { title: "Reimpressão antiga", authors: [] },
           },
         ],
         key: "",
@@ -67,4 +76,21 @@ test("cadastro abre pronto para o leitor e busca ao ler o ISBN", async ({
   await field.fill("97885");
   await page.waitForTimeout(500);
   expect(lookups.length).toBe(2);
+
+  // Choosing a sheet: it stays highlighted, the others fold away, and
+  // edition/pages keep only the numbers ABNT needs.
+  await page.getByRole("button", { name: "Usar esta ficha" }).first().click();
+  await expect(page.getByText("✓ Ficha usada")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Ficha em uso" }),
+  ).toBeDisabled();
+  await expect(page.getByText("Reimpressão antiga")).toBeHidden();
+  const edition = page.getByLabel(/^Edição/);
+  const pages = page.getByLabel(/^Número de páginas/);
+  await expect(edition).toHaveValue("78");
+  await expect(pages).toHaveValue("143");
+  await edition.fill("3. ed. rev.");
+  await expect(edition).toHaveValue("3");
+  await page.getByRole("button", { name: "Ver outras 1 ficha" }).click();
+  await expect(page.getByText("Reimpressão antiga")).toBeVisible();
 });

@@ -14,7 +14,8 @@ test("login, localização, cadastro, busca e referência", async ({ page }) => 
   await expect(
     page.getByRole("heading", { name: "Minha biblioteca" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Localizações", exact: true }).click();
+  await page.getByRole("button", { name: "Configurações" }).click();
+  await page.getByRole("menuitem", { name: "Localizações" }).click();
   await page.getByLabel("Ambiente", { exact: true }).fill("Escritório piloto");
   await page.getByLabel("Estante", { exact: true }).fill("03");
   await page.getByLabel("Prateleira", { exact: true }).fill("02");

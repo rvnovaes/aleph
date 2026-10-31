@@ -12,7 +12,7 @@ from pathlib import Path
 from django.db import transaction
 
 from .models import Author, City, Contribution, Identifier, ImportRecord, Item, Publisher, Tag, Work
-from .services import normalize_identifier, resolve_publisher
+from .services import clean_pages, normalize_identifier, resolve_publisher
 
 
 def text(value):
@@ -169,7 +169,7 @@ def parse_record(raw, warnings):
         "title": text(raw.get("title")) or "Sem título",
         "year": int(year) if re.fullmatch(r"\d{4}", year) and int(year) > 0 else None,
         "language": "; ".join(strings(raw.get("language_codeA")) or strings(raw.get("language"))),
-        "pages": text(raw.get("pages")),
+        "pages": clean_pages(text(raw.get("pages"))),
         "notes": text(raw.get("comment")),
         "private_notes": text(raw.get("privatecomment")),
         "subjects": list(dict.fromkeys(subjects)),

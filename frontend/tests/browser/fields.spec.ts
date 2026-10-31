@@ -87,7 +87,8 @@ test("exclui editora só quando não tem cadastros", async ({ page }) => {
   await page.getByLabel("Usuário", { exact: true }).fill(credentials.username);
   await page.getByLabel("Senha", { exact: true }).fill(credentials.password);
   await page.getByRole("button", { name: "Entrar", exact: true }).click();
-  await page.getByRole("button", { name: "Editoras", exact: true }).click();
+  await page.getByRole("button", { name: "Configurações" }).click();
+  await page.getByRole("menuitem", { name: "Editoras" }).click();
   await page.getByLabel("Nome da editora").fill("Editora vazia de teste");
   await page.getByRole("button", { name: "Cadastrar editora" }).click();
   await expect(page.getByText("Editora salva.")).toBeVisible();

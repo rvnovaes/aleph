@@ -14,6 +14,12 @@
   import { bibliography, bibliographyFromForm } from "$lib/citations";
   import ItemFields from "$lib/ItemFields.svelte";
   import SearchSelect from "$lib/SearchSelect.svelte";
+  import {
+    cleanEdition,
+    cleanPages,
+    typedEdition,
+    typedPages,
+  } from "$lib/fields";
   import type { Item } from "$lib/api";
   let publishers = $state<Publisher[]>([]);
   async function loadPublishers() {
@@ -28,6 +34,8 @@
     if (found?.default_city && !form.city.trim())
       form.city = found.default_city;
   }
+  let media = $state(""),
+    settingsOpen = $state(false);
   let tagFilters = $state<string[]>([]),
     tagOptions = $state<string[]>([]),
     languages = $state<{ value: string; name: string }[]>([]),
@@ -109,8 +117,6 @@
   const fields: {
     key:
       | "subtitle"
-      | "edition"
-      | "pages"
       | "publisher"
       | "city"
       | "journal"
@@ -120,8 +126,6 @@
     label: string;
   }[] = [
     { key: "subtitle", label: "Subtítulo" },
-    { key: "edition", label: "Edição" },
-    { key: "pages", label: "Páginas / intervalo" },
     { key: "city", label: "Cidade de publicação" },
     { key: "journal", label: "Periódico (artigos)" },
     { key: "volume", label: "Volume" },
@@ -172,6 +176,7 @@
       kind,
       pending: String(pending),
       unlocated: String(unlocated),
+      media,
     });
     if (filterLocation) params.set("location", filterLocation);
     for (const tag of tagFilters) params.append("tag", tag);
@@ -259,6 +264,7 @@
     log: string[];
     group: string[];
     done: boolean;
+    collapsed?: boolean;
   };
   let progress = $state<Progress | null>(null);
   let progressLog = $state<HTMLElement>();
@@ -307,6 +313,8 @@
     await run(async () => {
       candidates = [];
       candidateKey = "";
+      chosen = null;
+      showOthers = false;
       progress = { steps: [], status: {}, log: [], group: [], done: false };
       let r: {
         existing_id?: number;
@@ -361,6 +369,9 @@
     if (progress && !progress.steps.length) progress = null;
     else if (progress && !progress.done) progress.done = true;
   }
+  // The chosen sheet stays in view; the others fold away until asked for.
+  let chosen = $state<number | null>(null),
+    showOthers = $state(false);
   function choose(index: number) {
     const candidate = candidates[index];
     if (form.id) {
@@ -377,7 +388,12 @@
     selectPublisher(form.publisher);
     form.candidate_key = candidateKey;
     form.candidate_index = index;
-    notice = "Confira a edição e os autores antes de salvar.";
+    form.edition = cleanEdition(form.edition);
+    form.pages = cleanPages(form.pages, form.kind);
+    chosen = index;
+    showOthers = false;
+    if (progress) progress.collapsed = true;
+    notice = "Ficha aplicada. Confira a edição e os autores antes de salvar.";
   }
   async function regenerateReference() {
     await run(async () => {
@@ -466,6 +482,15 @@
   }
 </script>
 
+<svelte:window
+  onclick={(e) => {
+    if (settingsOpen && !(e.target as Element).closest?.(".menu-wrap"))
+      settingsOpen = false;
+  }}
+  onkeydown={(e) => {
+    if (e.key === "Escape") settingsOpen = false;
+  }}
+/>
 <svelte:head><title>Aleph · Minha biblioteca</title></svelte:head>
 <div class="shell">
   <header class="header">
@@ -479,7 +504,6 @@
       </div>
     </a>
     <div class="actions header-actions">
-      <ThemeToggle />
       {#if user}<nav class="actions" aria-label="Navegação">
           <button
             class="secondary"
@@ -490,21 +514,41 @@
                 await load();
               })}>Catálogo</button
           ><button
-            class="secondary"
-            onclick={() =>
-              run(async () => {
-                locations = await request("/v1/locations");
-                screen = "locations";
-              })}>Localizações</button
-          ><button
-            class="secondary"
-            onclick={() =>
-              run(async () => {
-                await loadPublishers();
-                screen = "publishers";
-                reference = "";
-              })}>Editoras</button
-          ><button
+            class="secondary icon-button"
+            aria-label="Cadastrar livro ou artigo"
+            title="Cadastrar livro ou artigo"
+            onclick={newWork}><span aria-hidden="true">+</span></button
+          ><div class="menu-wrap">
+            <button
+              class="secondary icon-button"
+              aria-label="Configurações"
+              title="Configurações"
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+              onclick={() => (settingsOpen = !settingsOpen)}
+              ><span aria-hidden="true">⚙</span></button
+            >
+            {#if settingsOpen}<div class="menu" role="menu">
+                <button
+                  role="menuitem"
+                  onclick={() =>
+                    run(async () => {
+                      settingsOpen = false;
+                      locations = await request("/v1/locations");
+                      screen = "locations";
+                    })}>Localizações</button
+                ><button
+                  role="menuitem"
+                  onclick={() =>
+                    run(async () => {
+                      settingsOpen = false;
+                      await loadPublishers();
+                      screen = "publishers";
+                      reference = "";
+                    })}>Editoras</button
+                >
+              </div>{/if}
+          </div><ThemeToggle /><button
             class="secondary"
             onclick={() =>
               run(async () => {
@@ -517,7 +561,7 @@
                 selected = [];
               })}>Sair · {user}</button
           >
-        </nav>{/if}
+        </nav>{:else}<ThemeToggle />{/if}
     </div>
   </header>
   {#if error}<div class="alert" role="alert">{error}</div>{/if}{#if notice}<div
@@ -600,6 +644,16 @@
           ><option value="">Todos os tipos</option><option value="book"
             >Livros</option
           ><option value="article-journal">Artigos</option></select
+        ><select
+          aria-label="Formato"
+          bind:value={media}
+          onchange={() => {
+            page = 1;
+            run(load);
+          }}
+          ><option value="">PDF e físico</option><option value="pdf"
+            >Com PDF</option
+          ><option value="physical">Livro físico</option></select
         ><SearchSelect
           ariaLabel="Localização"
           options={locationOptions}
@@ -925,31 +979,85 @@
                 max={progress.steps.length || 1}
                 value={progress.done ? progress.steps.length : finished}
               ></progress>
-              <ol bind:this={progressLog} role="log" aria-live="polite">
-                {#each progress.log as line}<li>{line}</li>{/each}
-              </ol>
+              {#if progress.collapsed}
+                <button
+                  type="button"
+                  class="link-button"
+                  onclick={() => progress && (progress.collapsed = false)}
+                  >Ver andamento da busca</button
+                >
+              {:else}
+                <ol bind:this={progressLog} role="log" aria-live="polite">
+                  {#each progress.log as line}<li>{line}</li>{/each}
+                </ol>
+              {/if}
             </div>
           {/if}
-          {#each candidates as candidate, index}<div
-              class="card"
+          {#snippet sheet(candidate: (typeof candidates)[number], index: number)}
+            <div
+              class="card candidate"
+              class:chosen={chosen === index}
               style="margin-top:1rem"
             >
-              <span class="tag">{candidate.source}</span>
+              <div class="actions">
+                <span class="tag">{candidate.source}</span>
+                {#if chosen === index}<span class="tag chosen-tag"
+                    >✓ Ficha usada</span
+                  >{/if}
+              </div>
               <h2>{candidate.data.title}</h2>
               <p>{candidate.data.authors?.map((a) => a.name).join("; ")}</p>
               <p class="muted">
-                {candidate.data.publisher} · {candidate.data.year} · {candidate
-                  .data.edition} · {candidate.data.pages}
+                {[
+                  candidate.data.publisher,
+                  candidate.data.year,
+                  candidate.data.edition && candidate.data.edition + ". ed.",
+                  candidate.data.pages && candidate.data.pages + " p.",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </p>
               <button
                 type="button"
                 class="secondary"
+                disabled={chosen === index}
                 onclick={() => choose(index)}
-                >{form.id
-                  ? "Preencher campos vazios"
-                  : "Usar esta ficha"}</button
+                >{chosen === index
+                  ? "Ficha em uso"
+                  : form.id
+                    ? "Preencher campos vazios"
+                    : chosen === null
+                      ? "Usar esta ficha"
+                      : "Usar esta ficha no lugar"}</button
               >
-            </div>{/each}
+            </div>
+          {/snippet}
+          {#if chosen === null}
+            {#each candidates as candidate, index}{@render sheet(
+                candidate,
+                index,
+              )}{/each}
+          {:else if candidates[chosen]}
+            {@render sheet(candidates[chosen], chosen)}
+            {#if candidates.length > 1}
+              <button
+                type="button"
+                class="secondary"
+                style="margin-top:.8rem"
+                aria-expanded={showOthers}
+                onclick={() => (showOthers = !showOthers)}
+                >{showOthers
+                  ? "Ocultar outras fichas"
+                  : `Ver outras ${candidates.length - 1} ficha${candidates.length > 2 ? "s" : ""}`}</button
+              >
+              {#if showOthers}
+                {#each candidates as candidate, index}{#if index !== chosen}{@render sheet(
+                      candidate,
+                      index,
+                    )}{/if}{/each}
+              {/if}
+            {/if}
+          {/if}
         </section>
         <section class="card">
           <h2>Dados bibliográficos</h2>
@@ -995,7 +1103,35 @@
                 >Selecione uma editora cadastrada ou digite um novo nome. A
                 cidade padrão preenche apenas uma cidade vazia.</small
               >
-            </label>{#each fields as field}<label
+            </label><label
+              >Edição<input
+                inputmode="numeric"
+                placeholder="Ex.: 2"
+                value={form.edition}
+                oninput={(e) => {
+                  form.edition = typedEdition(e.currentTarget.value);
+                  e.currentTarget.value = form.edition;
+                }}
+              /><small class="muted"
+                >Só o número; a referência ABNT acrescenta “ed.”.</small
+              ></label
+            ><label
+              >{form.kind === "article-journal"
+                ? "Páginas (intervalo)"
+                : "Número de páginas"}<input
+                inputmode="numeric"
+                placeholder={form.kind === "article-journal" ? "Ex.: 10-20" : "Ex.: 143"}
+                value={form.pages}
+                oninput={(e) => {
+                  form.pages = typedPages(e.currentTarget.value, form.kind);
+                  e.currentTarget.value = form.pages;
+                }}
+              /><small class="muted"
+                >{form.kind === "article-journal"
+                  ? "Página inicial e final, separadas por hífen."
+                  : "Só o número; a referência ABNT acrescenta “p.”."}</small
+              ></label
+            >{#each fields as field}<label
                 >{field.label}<input bind:value={form[field.key]} /></label
               >{/each}<label
               >Idioma<SearchSelect

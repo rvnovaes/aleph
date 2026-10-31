@@ -128,7 +128,7 @@ def test_library_of_congress_is_the_last_fallback(authenticated):
         "bath.isbn=9780262033848 or bath.isbn=0262033844"
     )
     assert found[0]["source"] == "Library of Congress"
-    assert found[0]["data"]["edition"] == "3rd ed"
+    assert found[0]["data"]["edition"] == "3"
 
     with (
         patch("catalog.connectors.ufsc", return_value=[]),

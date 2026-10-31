@@ -14,7 +14,7 @@ from django.utils import timezone
 from pymarc import MARCReader, parse_xml_to_array
 
 from .models import LookupCache
-from .services import normalize_identifier
+from .services import clean_edition, clean_pages, normalize_identifier
 
 
 def author_name(name):
@@ -66,10 +66,10 @@ def marc_candidate(record):
             "subtitle": sub("245", "b"),
             "kind": "book",
             "year": int(match[0]) if match else None,
-            "edition": sub("250", "a"),
+            "edition": clean_edition(sub("250", "a")),
             "publisher": sub(publication, "b"),
             "city": sub(publication, "a"),
-            "pages": sub("300", "a"),
+            "pages": clean_pages(sub("300", "a")),
             "authors": authors,
             "identifiers": identifiers,
         },
@@ -282,7 +282,7 @@ def openlibrary(isbn):
                 "year": int(match[0]) if match else None,
                 "publisher": first_name("publishers"),
                 "city": first_name("publish_places"),
-                "pages": str(data.get("number_of_pages", "")),
+                "pages": clean_pages(str(data.get("number_of_pages", ""))),
                 "authors": [author_name(a["name"]) for a in data.get("authors", [])],
                 "identifiers": [{"scheme": "isbn", "value": isbn}],
             },
@@ -317,7 +317,7 @@ def crossref(doi):
                 "journal": next(iter(data.get("container-title", [])), ""),
                 "volume": data.get("volume", ""),
                 "issue": data.get("issue", ""),
-                "pages": data.get("page", ""),
+                "pages": clean_pages(data.get("page", ""), "article-journal"),
                 "url": data.get("URL", ""),
                 "authors": authors,
                 "identifiers": [{"scheme": "doi", "value": doi}],
